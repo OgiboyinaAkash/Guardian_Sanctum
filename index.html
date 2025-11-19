@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Guardian's Sanctum — RL Sandbox</title>
+    <style>
+        /* Reused style from Grid Wall with minor adjustments */
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body { font-family: 'Times New Roman', Times, serif; background: linear-gradient(135deg,#f5f7fa 0%,#c3cfe2 100%); min-height:100vh; }
+        .container { max-width:1200px; margin:24px auto; background:white; padding:20px; border-radius:8px; box-shadow:0 8px 30px rgba(0,0,0,0.08);} 
+        h1 { text-align:center; color:#1a1a2e; margin-bottom:6px }
+        .main { display:grid; grid-template-columns: 420px 1fr; gap:20px; margin-top:18px }
+        .panel { background:#fff; border:1px solid #e3e3e3; padding:16px; border-radius:6px }
+        .grid-container { display:flex; justify-content:center; margin-top:12px }
+        .grid { display:grid; gap:2px; background:#444; padding:4px; border-radius:6px }
+        .cell { width:48px; height:48px; background:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-family:monospace; border-radius:3px; position:relative }
+        .cell.wall { background:#2c3e50; color:white }
+        .cell.start { background:#27ae60; color:white }
+        .cell.key { background:#9b59b6; color:white }
+        .cell.door { background:#d35400; color:white }
+        .cell.treasure { background:#f1c40f; color:#111 }
+        .cell.agent { background:#3b82f6; color:white }
+        .cell.sentinel { background:#ef4444; color:white }
+
+        .controls { display:flex; flex-direction:column; gap:10px }
+        label { font-weight:600; margin-bottom:6px; color:#333 }
+        input[type=number], select { padding:8px; border:1px solid #ccc; border-radius:4px }
+        .buttons { display:flex; gap:8px; margin-top:8px }
+        button { padding:10px 12px; border-radius:4px; border:none; cursor:pointer; font-weight:700 }
+        button.primary { background:#1a1a2e; color:white }
+        button.secondary { background:#e0e0e0 }
+        .legend { display:flex; gap:10px; margin-top:10px; flex-wrap:wrap }
+        .legend-item { display:flex; gap:8px; align-items:center }
+        .legend-swatch { width:20px; height:20px; border-radius:3px; border:1px solid #ccc }
+
+        canvas { width:100%; height:300px; background:#fff; border:1px solid #ddd; border-radius:4px }
+
+        .stats { display:flex; gap:12px; margin-top:12px }
+        .stat { background:#fafafa; padding:10px; border-radius:6px; border:1px solid #eee; flex:1 }
+
+        @media (max-width:900px) { .main{grid-template-columns:1fr} .cell{width:40px;height:40px} }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Guardian's Sanctum — RL Sandbox</h1>
+        <p style="text-align:center;color:#666;margin-top:6px;font-style:italic">Navigate the sanctum, pick up the key, open the door, avoid sentinels (noise attracts them).</p>
+
+        <div class="main">
+            <div class="panel">
+                <h3>Environment</h3>
+                <div class="controls">
+                    <div>
+                        <label>Map Size (rows x cols)</label>
+                        <input id="mapSize" type="number" min="5" max="12" value="7">
+                    </div>
+                    <div>
+                        <label>Preset Map</label>
+                        <select id="preset">
+                            <option value="default">Default Sanctum (7x7)</option>
+                        </select>
+                    </div>
+                    <div class="legend">
+                        <div class="legend-item"><div class="legend-swatch" style="background:#27ae60"></div><div>Start</div></div>
+                        <div class="legend-item"><div class="legend-swatch" style="background:#9b59b6"></div><div>Key</div></div>
+                        <div class="legend-item"><div class="legend-swatch" style="background:#d35400"></div><div>Door</div></div>
+                        <div class="legend-item"><div class="legend-swatch" style="background:#f1c40f"></div><div>Treasure</div></div>
+                        <div class="legend-item"><div class="legend-swatch" style="background:#ef4444"></div><div>Sentinel</div></div>
+                        <div class="legend-item"><div class="legend-swatch" style="background:#2c3e50"></div><div>Wall</div></div>
+                    </div>
+                    <div class="buttons">
+                        <button class="primary" onclick="resetEnv()">Reset Env</button>
+                        <button class="secondary" onclick="randomizeWalls()">Random Walls</button>
+                    </div>
+
+                    <div style="margin-top:12px;">
+                        <label>Edit Mode</label>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+                            <label><input type="radio" name="editMode" value="wall" checked onchange="setEditMode('wall')"> Toggle Wall</label>
+                            <label><input type="radio" name="editMode" value="start" onchange="setEditMode('start')"> Set Start</label>
+                            <label><input type="radio" name="editMode" value="key" onchange="setEditMode('key')"> Set Key</label>
+                            <label><input type="radio" name="editMode" value="door" onchange="setEditMode('door')"> Set Door</label>
+                            <label><input type="radio" name="editMode" value="treasure" onchange="setEditMode('treasure')"> Set Treasure</label>
+                            <label><input type="radio" name="editMode" value="patrol" onchange="setEditMode('patrol')"> Add Patrol Point</label>
+                        </div>
+
+                        <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+                            <button class="secondary" onclick="addPatrol()">Add Patrol</button>
+                            <button class="secondary" onclick="removePatrol()">Remove Selected Patrol</button>
+                            <select id="patrolSelect" onchange="selectPatrol(this.value)"></select>
+                            <button class="secondary" onclick="clearPatrolPoints()">Clear Points</button>
+                        </div>
+                        <div style="margin-top:8px;font-size:0.9em;color:#555">Click grid cells to apply the selected edit mode. When "Add Patrol Point" is active, clicks append points to the selected patrol route.</div>
+                    </div>
+                </div>
+
+                <div class="grid-container">
+                    <div id="grid" class="grid"></div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h3>Agents & Training</h3>
+                <div class="controls">
+                    <div>
+                        <label>Algorithms</label>
+                        <div><input id="algoQ" type="checkbox" checked> Q-Learning</div>
+                        <div><input id="algoS" type="checkbox" checked> SARSA</div>
+                        <div><input id="algoM" type="checkbox" checked> Monte Carlo (First-Visit)</div>
+                    </div>
+                    <div>
+                        <label>Hyperparameters</label>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                            <input id="alpha" type="number" step="0.01" min="0.01" max="1" value="0.1" placeholder="alpha">
+                            <input id="gamma" type="number" step="0.01" min="0.0" max="0.99" value="0.95" placeholder="gamma">
+                            <input id="eps" type="number" step="0.01" min="0.0" max="1" value="0.1" placeholder="epsilon">
+                            <input id="episodes" type="number" min="50" max="5000" value="500" placeholder="episodes">
+                        </div>
+                    </div>
+                    <div class="buttons">
+                        <button class="primary" onclick="trainAll()">Train</button>
+                        <button class="secondary" onclick="stopTraining()">Stop</button>
+                        <button class="secondary" onclick="simulatePolicies()">Simulate Policies</button>
+                    </div>
+                </div>
+
+                <canvas id="chart"></canvas>
+                <div class="stats">
+                    <div class="stat"><div style="font-weight:700">Last Episode Steps</div><div id="lastSteps">-</div></div>
+                    <div class="stat"><div style="font-weight:700">Wins</div><div id="wins">-</div></div>
+                    <div class="stat"><div style="font-weight:700">Caught</div><div id="caught">-</div></div>
+                    <div class="stat"><div style="font-weight:700">Best Agent</div><div id="bestAgent">-</div></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Guardian's Sanctum JS implementation mirroring guardian_env.py
+        const ACTIONS = [0,1,2,3,4,5,6,7]; // 0..3 normal, 4..7 fast
+        const DIRS = {
+            0: [0,-1], // up
+            1: [1,0],  // right
+            2: [0,1],  // down
+            3: [-1,0]  // left
+        };
+
+        // Map definition (default 7x7) similar to guardian_env.py
+        const default_map = [
+            "#######",
+            "#S...K#",
+            "#.#.#.#",
+            "#..D..#",
+            "#.#.#.#",
+            "#...T.#",
+            "#######",
+        ];
+
+        let raw_map = default_map.slice();
+        let rows = raw_map.length, cols = raw_map[0].length;
+        let agentPos = null; let hasKey = false; let sentinelIdxs = []; let sentinels = [];
+        let stepCount = 0; let maxSteps = 500;
+
+        // Training state
+        let trainingResults = {};
+        let trainingAbort = false;
+        // Editor state
+        let editMode = 'wall';
+        let selectedPatrol = -1; // index into patrols
+
+        function parseMap(map) {
+            rows = map.length; cols = map[0].length;
+            walls = new Set();
+            let start=null,key=null,door=null,treasure=null;
+            for (let y=0;y<rows;y++){
+                for (let x=0;x<cols;x++){
+                    const ch = map[y][x];
+                    if (ch==='#') walls.add(`${x},${y}`);
+                    if (ch==='S') start=[x,y];
+                    if (ch==='K') key=[x,y];
+                    if (ch==='D') door=[x,y];
+                    if (ch==='T') treasure=[x,y];
+                }
+            }
+            // define patrol routes (hardcoded or derived)
+            const patrols = [ [[1,4],[2,4],[3,4],[2,4]], [[5,2],[5,3],[5,4],[5,3]] ];
+            return {walls,start,key,door,treasure,patrols};
+        }
+
+        let walls, startPos, keyPos, doorPos, treasurePos, patrols;
+
+        function resetEnvInternal() {
+            ({walls,start:keyPos,door:doorPos,treasure:treasurePos,patrols} = (()=>{
+                const parsed = parseMap(raw_map);
+                return { walls: parsed.walls, start: parsed.start, key: parsed.key, door: parsed.door, treasure: parsed.treasure, patrols: parsed.patrols };
+            })());
+            agentPos = startPos = parseMap(raw_map).start;
+            keyPos = parseMap(raw_map).key;
+            doorPos = parseMap(raw_map).door;
+            treasurePos = parseMap(raw_map).treasure;
+            hasKey = false;
+            sentinelIdxs = patrols.map(()=>0);
+            sentinels = patrols.map((r,i)=> r[0]);
+            stepCount = 0;
+            renderGrid();
+        }
+
+        // Editor helpers
+        function setEditMode(mode){ editMode = mode; }
+
+        function setTile(x,y,ch){ const row = raw_map[y].split(''); row[x]=ch; raw_map[y]=row.join(''); }
+
+        function onCellClick(x,y){ const ch = raw_map[y][x];
+            if (editMode==='wall'){
+                // toggle only on floor (.) -> wall and wall -> floor
+                if (ch === '#') setTile(x,y,'.');
+                else if (ch === '.') setTile(x,y,'#');
+            } else if (editMode==='start'){
+                // remove old start
+                for(let yy=0;yy<rows;yy++){ for(let xx=0;xx<cols;xx++){ if (raw_map[yy][xx]==='S') setTile(xx,yy,'.'); }} setTile(x,y,'S');
+            } else if (editMode==='key'){
+                for(let yy=0;yy<rows;yy++){ for(let xx=0;xx<cols;xx++){ if (raw_map[yy][xx]==='K') setTile(xx,yy,'.'); }} setTile(x,y,'K');
+            } else if (editMode==='door'){
+                for(let yy=0;yy<rows;yy++){ for(let xx=0;xx<cols;xx++){ if (raw_map[yy][xx]==='D') setTile(xx,yy,'.'); }} setTile(x,y,'D');
+            } else if (editMode==='treasure'){
+                for(let yy=0;yy<rows;yy++){ for(let xx=0;xx<cols;xx++){ if (raw_map[yy][xx]==='T') setTile(xx,yy,'.'); }} setTile(x,y,'T');
+            } else if (editMode==='patrol'){
+                if (selectedPatrol < 0){ addPatrol(); }
+                // append point
+                patrols[selectedPatrol].push([x,y]);
+            }
+            // re-parse and render
+            ({walls,startPos,keyPos,doorPos,treasurePos} = parseMap(raw_map));
+            // keep existing patrols if any (parseMap returns default routes)
+            if (!patrols || patrols.length===0) patrols = parseMap(raw_map).patrols;
+            sentinelIdxs = patrols.map(()=>0);
+            sentinels = patrols.map(r=> r.length? r[0] : [-1,-1]);
+            renderGrid(); updatePatrolSelect();
+        }
+
+        function addPatrol(){ patrols = patrols || []; patrols.push([]); selectedPatrol = patrols.length-1; updatePatrolSelect(); }
+        function removePatrol(){ if (!patrols || patrols.length===0) return; if (selectedPatrol<0) return; patrols.splice(selectedPatrol,1); selectedPatrol = Math.max( -1, Math.min(selectedPatrol, patrols.length-1) ); updatePatrolSelect(); renderGrid(); }
+        function selectPatrol(val){ selectedPatrol = parseInt(val); if (isNaN(selectedPatrol)) selectedPatrol = -1; updatePatrolSelect(); }
+        function updatePatrolSelect(){ const sel = document.getElementById('patrolSelect'); if (!sel) return; sel.innerHTML=''; const noneOpt = document.createElement('option'); noneOpt.value='-1'; noneOpt.textContent='(none)'; sel.appendChild(noneOpt); for(let i=0;i<(patrols?patrols.length:0);i++){ const opt=document.createElement('option'); opt.value=i; opt.textContent=`Patrol ${i} (${patrols[i].length} pts)`; if (i===selectedPatrol) opt.selected=true; sel.appendChild(opt); } }
+        function clearPatrolPoints(){ if (selectedPatrol>=0 && patrols && patrols[selectedPatrol]){ patrols[selectedPatrol]=[]; updatePatrolSelect(); renderGrid(); } }
+
+        // Rendering
+        function renderGrid(){
+            const gridEl = document.getElementById('grid');
+            gridEl.innerHTML = '';
+            gridEl.style.gridTemplateColumns = `repeat(${cols}, 48px)`;
+            for (let y=0;y<rows;y++){
+                for (let x=0;x<cols;x++){
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    const key = `${x},${y}`;
+                    const ch = raw_map[y][x];
+                    if (walls.has(key)) { cell.classList.add('wall'); }
+                    if (startPos && startPos[0]===x && startPos[1]===y){ cell.classList.add('start'); cell.textContent='S' }
+                    if (keyPos && keyPos[0]===x && keyPos[1]===y && !hasKey){ cell.classList.add('key'); cell.textContent='K' }
+                    if (doorPos && doorPos[0]===x && doorPos[1]===y){ cell.classList.add('door'); cell.textContent='D' }
+                    if (treasurePos && treasurePos[0]===x && treasurePos[1]===y){ cell.classList.add('treasure'); cell.textContent='T' }
+                    for (let i=0;i<sentinels.length;i++){ const s = sentinels[i]; if (s[0]===x && s[1]===y){ cell.classList.add('sentinel'); cell.textContent='G' } }
+                    if (agentPos && agentPos[0]===x && agentPos[1]===y){ cell.classList.add('agent'); cell.textContent='A' }
+                    // mark patrol points (small indicator)
+                    if (patrols){
+                        for (let pi=0; pi<patrols.length; pi++){
+                            const route = patrols[pi];
+                            for (let pj=0; pj<route.length; pj++){
+                                const p = route[pj];
+                                if (p && p[0]===x && p[1]===y){
+                                    const mark = document.createElement('div');
+                                    mark.style.position='absolute';
+                                    mark.style.bottom='2px';
+                                    mark.style.right='2px';
+                                    mark.style.fontSize='10px';
+                                    mark.style.color='rgba(255,255,255,0.9)';
+                                    mark.textContent = pi; // patrol index
+                                    cell.appendChild(mark);
+                                }
+                            }
+                        }
+                    }
+                    cell.addEventListener('click', () => onCellClick(x,y));
+                    gridEl.appendChild(cell);
+                }
+            }
+        }
+
+        // Utilities
+        function inBounds(pos){ return pos[0]>=0 && pos[0]<cols && pos[1]>=0 && pos[1]<rows }
+        function isFree(pos){ const k=`${pos[0]},${pos[1]}`; if (walls.has(k)) return false; if (doorPos && pos[0]===doorPos[0] && pos[1]===doorPos[1] && !hasKey) return false; return true }
+
+        function envReset(){ agentPos = startPos.slice(); hasKey=false; sentinelIdxs = patrols.map(()=>0); sentinels = patrols.map(r=>r[0]); stepCount=0; return getState(); }
+
+        function patrolCycle(){ let prod=1; for(const r of patrols) prod*=r.length; return prod }
+
+        function getState(){ return `${agentPos[0]},${agentPos[1]},${hasKey?1:0},${stepCount%patrolCycle()}` }
+
+        function stepEnv(action){
+            const fast = action>=4; const base = action%4;
+            let reward = -1.0; let done=false; let info={};
+            let noisePos = null;
+            if (fast){
+                // intermediate
+                let mid = [ agentPos[0]+DIRS[base][0], agentPos[1]+DIRS[base][1] ];
+                if (inBounds(mid) && isFree(mid)) agentPos = mid;
+                // final
+                let final = [ agentPos[0]+DIRS[base][0], agentPos[1]+DIRS[base][1] ];
+                if (inBounds(final) && isFree(final)) agentPos = final;
+                noisePos = agentPos.slice();
+            } else {
+                let target = [ agentPos[0]+DIRS[base][0], agentPos[1]+DIRS[base][1] ];
+                if (inBounds(target) && isFree(target)) agentPos = target;
+            }
+
+            // pick up key
+            if (keyPos && agentPos[0]===keyPos[0] && agentPos[1]===keyPos[1] && !hasKey){ hasKey=true; reward += 50 }
+
+            // move sentinels
+            let newPos = [];
+            for (let i=0;i<patrols.length;i++){
+                let route = patrols[i]; let curIdx = sentinelIdxs[i]; let curPos = route[curIdx];
+                let nextIdx = (curIdx+1)%route.length;
+                if (noisePos!==null && (Math.abs(curPos[0]-noisePos[0])+Math.abs(curPos[1]-noisePos[1]))<=3){
+                    let dx = Math.sign(noisePos[0]-curPos[0]); let dy = Math.sign(noisePos[1]-curPos[1]);
+                    let cand=[curPos[0]+dx,curPos[1]+dy];
+                    const k = `${cand[0]},${cand[1]}`;
+                    if (!walls.has(k)) { newPos.push(cand); sentinelIdxs[i]=curIdx; continue; }
+                }
+                newPos.push(route[nextIdx]); sentinelIdxs[i]=nextIdx;
+            }
+            sentinels = newPos;
+
+            // check caught
+            for (const s of sentinels){ if (s[0]===agentPos[0] && s[1]===agentPos[1]){ reward -=100; done=true; info.caught=true; renderGrid(); return {state:getState(), reward, done, info} } }
+
+            stepCount += 1; if (stepCount>=maxSteps){ done=true; info.timeout=true }
+
+            // treasure
+            if (treasurePos && agentPos[0]===treasurePos[0] && agentPos[1]===treasurePos[1] && hasKey){ reward += 200; done=true; info.win=true }
+
+            renderGrid(); return { state:getState(), reward, done, info };
+        }
+
+        // JS Agents (tabular) — simplified versions
+        function initQ(){ const Q={}; for(let y=0;y<rows;y++){ for(let x=0;x<cols;x++){ const k=`${x},${y},0,0`; /* we'll use getState dynamic keys, but for simplicity we'll lazily init */ } } return Q }
+
+        function qLearningJS(alpha,gamma,eps,episodes){
+            const Q = {}; const stepsPerEpisode=[]; let wins=0,caught=0;
+            for(let ep=0; ep<episodes; ep++){
+                let state = envReset(); // resetEnv
+                state = getState(); let done=false; let steps=0; while(!done && steps<200){
+                    // choose action
+                    if (!(state in Q)){ Q[state] = new Array(8).fill(0) }
+                    let a;
+                    if (Math.random()<eps) a = Math.floor(Math.random()*8); else a = argMax(Q[state]);
+                    const res = stepEnv(a);
+                    const nextState = res.state; const r = res.reward; done = res.done;
+                    if (!(nextState in Q)) Q[nextState]=new Array(8).fill(0);
+                    const bestNext = Math.max(...Q[nextState]);
+                    Q[state][a] += alpha*(r + gamma*bestNext - Q[state][a]);
+                    state = nextState; steps++;
+                    if (res.info && res.info.win) wins++; if (res.info && res.info.caught) caught++;
+                }
+                stepsPerEpisode.push(steps);
+                if (trainingAbort) break;
+            }
+            return {Q, stepsPerEpisode, wins, caught};
+        }
+
+        function sarsaJS(alpha,gamma,eps,episodes){
+            const Q = {}; const stepsPerEpisode=[]; let wins=0,caught=0;
+            for(let ep=0; ep<episodes; ep++){
+                let state = envReset(); state = getState(); if (!(state in Q)) Q[state]=new Array(8).fill(0);
+                let a = (Math.random()<eps) ? Math.floor(Math.random()*8) : argMax(Q[state]);
+                let done=false; let steps=0;
+                while(!done && steps<200){
+                    const res = stepEnv(a); const nextState = res.state; const r = res.reward; done=res.done;
+                    if (!(nextState in Q)) Q[nextState]=new Array(8).fill(0);
+                    const nextA = (Math.random()<eps) ? Math.floor(Math.random()*8) : argMax(Q[nextState]);
+                    Q[state][a] += alpha*(r + gamma*Q[nextState][nextA] - Q[state][a]);
+                    state = nextState; a = nextA; steps++;
+                    if (res.info && res.info.win) wins++; if (res.info && res.info.caught) caught++;
+                    if (trainingAbort) break;
+                }
+                stepsPerEpisode.push(steps);
+                if (trainingAbort) break;
+            }
+            return {Q, stepsPerEpisode, wins, caught};
+        }
+
+        function monteCarloJS(alpha,gamma,eps,episodes){
+            const Q = {}; const returnsSum = {}; const returnsCount = {}; const stepsPerEpisode=[]; let wins=0,caught=0;
+            for(let ep=0; ep<episodes; ep++){
+                // generate episode
+                envReset(); let done=false; let steps=0; const episode=[];
+                while(!done && steps<200){ const state=getState(); if (!(state in Q)) Q[state]=new Array(8).fill(0);
+                    const a = (Math.random()<eps)?Math.floor(Math.random()*8):argMax(Q[state]);
+                    const res = stepEnv(a); episode.push({state,action:a,reward:res.reward}); done=res.done; if (res.info && res.info.win) wins++; if (res.info && res.info.caught) caught++; steps++; if (trainingAbort) break; }
+                stepsPerEpisode.push(steps);
+                // compute returns first-visit
+                let G=0; const visited=new Set();
+                for(let t=episode.length-1;t>=0;t--){ const s=episode[t].state; const a=episode[t].action; const r=episode[t].reward; G = gamma*G + r; const saKey = `${s}|${a}`; if (!visited.has(saKey)){ visited.add(saKey); if (alpha===null){ returnsSum[saKey] = (returnsSum[saKey]||0) + G; returnsCount[saKey] = (returnsCount[saKey]||0) + 1; const sBase = s; Q[sBase][a] = returnsSum[saKey]/returnsCount[saKey]; } else { Q[s][a] += alpha*(G - Q[s][a]); } } }
+                if (trainingAbort) break;
+            }
+            return {Q, stepsPerEpisode, wins, caught};
+        }
+
+        function argMax(arr){ let best=0; for(let i=1;i<arr.length;i++){ if (arr[i]>arr[best]) best=i } return best }
+
+        // Controls and hooking
+        function resetEnv(){
+            // Initialize environment from the current raw_map (do NOT overwrite raw_map)
+            ({walls,startPos,keyPos,doorPos,treasurePos} = parseMap(raw_map));
+            if (!patrols || patrols.length===0) patrols = parseMap(raw_map).patrols;
+            agentPos = startPos ? startPos.slice() : [0,0];
+            sentinelIdxs = patrols.map(()=>0);
+            sentinels = patrols.map(r=> r.length? r[0] : [-1,-1]);
+            hasKey=false; stepCount=0; updatePatrolSelect(); renderGrid();
+        }
+        function randomizeWalls(){ // simple randomization while keeping S,K,D,T and border walls
+            const size = parseInt(document.getElementById('mapSize').value)||7; // for now keep default_map
+            // keep default for simplicity
+            alert('Random walls not implemented in this quick UI; using default map.');
+            resetEnv();
+        }
+
+        let chartCtx=null;
+        function drawChart(datasets){
+            const canvas = document.getElementById('chart'); canvas.width = canvas.offsetWidth; canvas.height = 300; chartCtx = canvas.getContext('2d'); chartCtx.clearRect(0,0,canvas.width,canvas.height);
+            // simple plot of steps per episode (smoothed)
+            const colors = { 'Q-Learning':'#3b82f6','SARSA':'#10b981','Monte':'#f59e0b' };
+            let maxLen=0, maxY=1; for(const ds of datasets){ maxLen = Math.max(maxLen, ds.length); for(const v of ds) maxY=Math.max(maxY,v); }
+            // axes
+            const pad = 40; chartCtx.strokeStyle='#333'; chartCtx.beginPath(); chartCtx.moveTo(pad,pad); chartCtx.lineTo(pad,canvas.height-pad); chartCtx.lineTo(canvas.width-pad,canvas.height-pad); chartCtx.stroke();
+            let i=0; for(const name in datasets){ const arr = datasets[name]; chartCtx.strokeStyle = (name==='Q-Learning'?colors['Q-Learning'] : name==='SARSA'?colors['SARSA']:colors['Monte']); chartCtx.beginPath(); for(let j=0;j<arr.length;j++){ const x = pad + (canvas.width-2*pad)*(j/(maxLen-1 || 1)); const y = canvas.height-pad - (canvas.height-2*pad)*(arr[j]/maxY); if (j===0) chartCtx.moveTo(x,y); else chartCtx.lineTo(x,y); } chartCtx.stroke(); i++; }
+        }
+
+        async function trainAll(){
+            trainingAbort=false; const alpha=parseFloat(document.getElementById('alpha').value); const gamma=parseFloat(document.getElementById('gamma').value); const eps=parseFloat(document.getElementById('eps').value); const episodes=parseInt(document.getElementById('episodes').value)||200;
+            trainingResults={};
+            const datasets = {};
+            if (document.getElementById('algoQ').checked){ resetEnv(); await sleep(50); const res = qLearningJS(alpha,gamma,eps,episodes); trainingResults['Q-Learning']=res; datasets['Q-Learning']=res.stepsPerEpisode; }
+            if (trainingAbort) return;
+            if (document.getElementById('algoS').checked){ resetEnv(); await sleep(50); const res = sarsaJS(alpha,gamma,eps,episodes); trainingResults['SARSA']=res; datasets['SARSA']=res.stepsPerEpisode; }
+            if (trainingAbort) return;
+            if (document.getElementById('algoM').checked){ resetEnv(); await sleep(50); const res = monteCarloJS(null,gamma,eps,episodes); trainingResults['Monte Carlo']=res; datasets['Monte']=res.stepsPerEpisode; }
+            drawChart(datasets);
+            // update stats
+            document.getElementById('lastSteps').textContent = Object.values(trainingResults).map(r=>r.stepsPerEpisode.slice(-1)[0]).join(' | ');
+            document.getElementById('wins').textContent = Object.values(trainingResults).map(r=>r.wins).join(' | ');
+            document.getElementById('caught').textContent = Object.values(trainingResults).map(r=>r.caught).join(' | ');
+            alert('Training complete (client-side). Use "Simulate Policies" to visualize learned greedy policies.');
+        }
+
+        function stopTraining(){ trainingAbort=true; }
+
+        function sleep(ms){ return new Promise(resolve=>setTimeout(resolve,ms)); }
+
+        function simulatePolicies(){
+            if (!trainingResults || Object.keys(trainingResults).length===0){ alert('Train algorithms first.'); return; }
+
+            const evalResults = [];
+            const maxTestSteps = 300;
+
+            // Evaluate each trained algorithm by running a greedy test episode
+            for (const name in trainingResults){
+                const data = trainingResults[name];
+                const Q = data.Q;
+                if (!Q) continue;
+
+                resetEnv(); let steps=0; let done=false; let caught=false; let win=false; const path=[];
+                while(!done && steps < maxTestSteps){
+                    const state = getState();
+                    if (!(state in Q)) { break; }
+                    const a = argMax(Q[state]);
+                    const res = stepEnv(a);
+                    path.push(agentPos.slice());
+                    if (res.info && res.info.caught) { caught = true; }
+                    if (res.info && res.info.win) { win = true; }
+                    done = res.done;
+                    steps++;
+                }
+
+                evalResults.push({ name, path, steps, win, caught, trainingWins: data.wins || 0 });
+            }
+
+            if (evalResults.length === 0){ alert('No valid policies to simulate.'); return; }
+
+            // Choose best: prefer any that wins; among winners pick minimal steps; tie-breaker fewer caught, then training wins
+            evalResults.sort((a,b)=>{
+                if (a.win !== b.win) return (a.win? -1: 1);
+                if (a.win && b.win){ if (a.steps !== b.steps) return a.steps - b.steps; }
+                if (a.caught !== b.caught) return (a.caught? 1: -1);
+                return b.trainingWins - a.trainingWins;
+            });
+
+            const best = evalResults[0];
+            document.getElementById('bestAgent').textContent = best.name + ' ' + (best.win ? '(win)' : '(no win)') + ' - ' + best.steps + ' steps';
+
+            // Animate best path with color by algorithm
+            const colorMap = { 'Q-Learning':'#3b82f6', 'SARSA':'#10b981', 'Monte Carlo':'#f59e0b', 'Monte':'#f59e0b' };
+            const color = colorMap[best.name] || '#60a5fa';
+            animatePath(best.path, color);
+        }
+
+        function animatePath(path, color){
+            // reset grid visuals first
+            renderGrid();
+            let i=0;
+            const gridEl = document.getElementById('grid');
+            const clearStyles = [];
+            const id = setInterval(()=>{
+                if (i>=path.length){ clearInterval(id); return; }
+                const p = path[i];
+                const idx = p[1]*cols + p[0];
+                const cell = gridEl.children[idx];
+                if (cell){
+                    // record original style so we can restore after full render
+                    cell.style.background = color;
+                    cell.style.color = 'white';
+                }
+                i++;
+            }, 180);
+        }
+
+        // startup
+        resetEnv();
+    </script>
+</body>
+</html>
