@@ -71,7 +71,6 @@
                     </div>
                     <div class="buttons">
                         <button class="primary" id="resetBtn" onclick="resetToDefault()">Reset Env</button>
-                        <button class="secondary" onclick="randomizeWalls()">Random Walls</button>
                     </div>
 
                     <div style="margin-top:12px;">
@@ -119,9 +118,9 @@
                         </div>
                     </div>
                     <div class="buttons">
-                        <button class="primary" onclick="trainAll()">Train</button>
-                        <button class="secondary" onclick="stopTraining()">Stop</button>
-                        <button class="secondary" onclick="simulatePolicies()">Simulate Policies</button>
+                        <button class="primary" id="trainBtn" onclick="trainAll()">Train</button>
+                        <button class="secondary" id="stopBtn" onclick="stopAll()">Stop</button>
+                        <button class="secondary" id="simulateBtn" onclick="simulatePolicies()">Simulate Policies</button>
                     </div>
                 </div>
 
@@ -138,7 +137,8 @@
 
     <script>
         // Guardian's Sanctum JS implementation mirroring guardian_env.py
-        const ACTIONS = [0,1,2,3,4,5,6,7]; // 0..3 normal, 4..7 fast
+        // Four cardinal actions only (no fast actions)
+        const ACTIONS = [0,1,2,3]; // up,right,down,left
         const DIRS = {
             0: [0,-1], // up
             1: [1,0],  // right
@@ -227,8 +227,8 @@
                 // append point
                 patrols[selectedPatrol].push([x,y]);
             }
-            // re-parse and render
-            ({walls,startPos,keyPos,doorPos,treasurePos} = parseMap(raw_map));
+            // re-parse and render (map parser returns keys: start, key, door, treasure)
+            ({ walls, start: startPos, key: keyPos, door: doorPos, treasure: treasurePos } = parseMap(raw_map));
             // keep existing patrols if any (parseMap returns default routes)
             if (!patrols || patrols.length===0) patrols = parseMap(raw_map).patrols;
             sentinelIdxs = patrols.map(()=>0);
@@ -296,37 +296,25 @@
         function getState(){ return `${agentPos[0]},${agentPos[1]},${hasKey?1:0},${stepCount%patrolCycle()}` }
 
         function stepEnv(action){
-            const fast = action>=4; const base = action%4;
+            // single-step movement only (no fast actions / no noise)
+            const base = action % 4;
             let reward = -1.0; let done=false; let info={};
-            let noisePos = null;
-            if (fast){
-                // intermediate
-                let mid = [ agentPos[0]+DIRS[base][0], agentPos[1]+DIRS[base][1] ];
-                if (inBounds(mid) && isFree(mid)) agentPos = mid;
-                // final
-                let final = [ agentPos[0]+DIRS[base][0], agentPos[1]+DIRS[base][1] ];
-                if (inBounds(final) && isFree(final)) agentPos = final;
-                noisePos = agentPos.slice();
-            } else {
-                let target = [ agentPos[0]+DIRS[base][0], agentPos[1]+DIRS[base][1] ];
-                if (inBounds(target) && isFree(target)) agentPos = target;
-            }
+
+            let target = [ agentPos[0]+DIRS[base][0], agentPos[1]+DIRS[base][1] ];
+            if (inBounds(target) && isFree(target)) agentPos = target;
 
             // pick up key
             if (keyPos && agentPos[0]===keyPos[0] && agentPos[1]===keyPos[1] && !hasKey){ hasKey=true; reward += 50 }
 
-            // move sentinels
+            // move sentinels along their patrol routes (no noise attraction)
             let newPos = [];
             for (let i=0;i<patrols.length;i++){
-                let route = patrols[i]; let curIdx = sentinelIdxs[i]; let curPos = route[curIdx];
-                let nextIdx = (curIdx+1)%route.length;
-                if (noisePos!==null && (Math.abs(curPos[0]-noisePos[0])+Math.abs(curPos[1]-noisePos[1]))<=3){
-                    let dx = Math.sign(noisePos[0]-curPos[0]); let dy = Math.sign(noisePos[1]-curPos[1]);
-                    let cand=[curPos[0]+dx,curPos[1]+dy];
-                    const k = `${cand[0]},${cand[1]}`;
-                    if (!walls.has(k)) { newPos.push(cand); sentinelIdxs[i]=curIdx; continue; }
-                }
-                newPos.push(route[nextIdx]); sentinelIdxs[i]=nextIdx;
+                let route = patrols[i];
+                if (!route || route.length===0){ newPos.push([-1,-1]); sentinelIdxs[i]=0; continue; }
+                let curIdx = sentinelIdxs[i];
+                let nextIdx = (curIdx+1) % route.length;
+                newPos.push(route[nextIdx]);
+                sentinelIdxs[i] = nextIdx;
             }
             sentinels = newPos;
 
@@ -352,11 +340,11 @@
                 while(!done && steps<200){
                     if (trainingAbort) break;
                     // choose action
-                    if (!(state in Q)){ Q[state] = new Array(8).fill(0); }
-                    let a = (Math.random()<eps) ? Math.floor(Math.random()*8) : argMax(Q[state]);
+                    if (!(state in Q)){ Q[state] = new Array(4).fill(0); }
+                    let a = (Math.random()<eps) ? Math.floor(Math.random()*4) : argMax(Q[state]);
                     const res = stepEnv(a);
                     const nextState = res.state; const r = res.reward; done = res.done;
-                    if (!(nextState in Q)) Q[nextState]=new Array(8).fill(0);
+                    if (!(nextState in Q)) Q[nextState]=new Array(4).fill(0);
                     const bestNext = Math.max(...Q[nextState]);
                     Q[state][a] += alpha*(r + gamma*bestNext - Q[state][a]);
                     state = nextState; steps++;
@@ -375,12 +363,13 @@
             for(let ep=0; ep<episodes; ep++){
                 if (trainingAbort) break;
                 let state = envReset(); state = getState(); if (!(state in Q)) Q[state]=new Array(8).fill(0);
-                let a = (Math.random()<eps) ? Math.floor(Math.random()*8) : argMax(Q[state]);
+                if (!(state in Q)) Q[state]=new Array(4).fill(0);
+                let a = (Math.random()<eps) ? Math.floor(Math.random()*4) : argMax(Q[state]);
                 let done=false; let steps=0;
                 while(!done && steps<200){
                     const res = stepEnv(a); const nextState = res.state; const r = res.reward; done=res.done;
-                    if (!(nextState in Q)) Q[nextState]=new Array(8).fill(0);
-                    const nextA = (Math.random()<eps) ? Math.floor(Math.random()*8) : argMax(Q[nextState]);
+                    if (!(nextState in Q)) Q[nextState]=new Array(4).fill(0);
+                    const nextA = (Math.random()<eps) ? Math.floor(Math.random()*4) : argMax(Q[nextState]);
                     Q[state][a] += alpha*(r + gamma*Q[nextState][nextA] - Q[state][a]);
                     state = nextState; a = nextA; steps++;
                     if (res.info && res.info.win) wins++; if (res.info && res.info.caught) caught++;
@@ -400,7 +389,8 @@
                 // generate episode
                 envReset(); let done=false; let steps=0; const episode=[];
                 while(!done && steps<200){ const state=getState(); if (!(state in Q)) Q[state]=new Array(8).fill(0);
-                    const a = (Math.random()<eps)?Math.floor(Math.random()*8):argMax(Q[state]);
+                    if (!(state in Q)) Q[state]=new Array(4).fill(0);
+                    const a = (Math.random()<eps)?Math.floor(Math.random()*4):argMax(Q[state]);
                     const res = stepEnv(a); episode.push({state,action:a,reward:res.reward}); done=res.done; if (res.info && res.info.win) wins++; if (res.info && res.info.caught) caught++; steps++; if (trainingAbort) break; }
                 stepsPerEpisode.push(steps);
                 // compute returns first-visit
@@ -449,15 +439,70 @@
             let i=0; for(const name in datasets){ const arr = datasets[name]; chartCtx.strokeStyle = (name==='Q-Learning'?colors['Q-Learning'] : name==='SARSA'?colors['SARSA']:colors['Monte']); chartCtx.beginPath(); for(let j=0;j<arr.length;j++){ const x = pad + (canvas.width-2*pad)*(j/(maxLen-1 || 1)); const y = canvas.height-pad - (canvas.height-2*pad)*(arr[j]/maxY); if (j===0) chartCtx.moveTo(x,y); else chartCtx.lineTo(x,y); } chartCtx.stroke(); i++; }
         }
 
+        // UI control helpers
+        function setControlsDisabledExcept(allowedIds){
+            const elements = document.querySelectorAll('button,input,select');
+            elements.forEach(el => {
+                const id = el.id || '';
+                if (Array.isArray(allowedIds) && allowedIds.includes(id)){
+                    el.disabled = false;
+                } else {
+                    el.disabled = true;
+                }
+            });
+        }
+
+        function setAllControlsEnabled(){
+            const elements = document.querySelectorAll('button,input,select');
+            elements.forEach(el => el.disabled = false);
+        }
+
+        let simulationInterval = null;
+        let simAbort = false;
+
+        function stopSimulation(){
+            simAbort = true;
+            if (simulationInterval) clearInterval(simulationInterval);
+            simulationInterval = null;
+            renderGrid();
+            setAllControlsEnabled();
+        }
+
+        function stopAll(){
+            // used by Stop button: stop training and simulation
+            trainingAbort = true;
+            stopSimulation();
+            setAllControlsEnabled();
+        }
+
         async function trainAll(){
             trainingAbort=false; const alpha=parseFloat(document.getElementById('alpha').value); const gamma=parseFloat(document.getElementById('gamma').value); const eps=parseFloat(document.getElementById('eps').value); const episodes=parseInt(document.getElementById('episodes').value)||200;
             trainingResults={};
             const datasets = {};
-            if (document.getElementById('algoQ').checked){ resetEnv(); await sleep(50); const res = await qLearningJS(alpha,gamma,eps,episodes); trainingResults['Q-Learning']=res; datasets['Q-Learning']=res.stepsPerEpisode; }
+            if (document.getElementById('algoQ').checked){
+                // disable controls except Stop while training
+                setControlsDisabledExcept(['stopBtn']);
+                resetEnv(); await sleep(50);
+                const res = await qLearningJS(alpha,gamma,eps,episodes);
+                trainingResults['Q-Learning']=res; datasets['Q-Learning']=res.stepsPerEpisode;
+                setAllControlsEnabled();
+            }
             if (trainingAbort) return;
-            if (document.getElementById('algoS').checked){ resetEnv(); await sleep(50); const res = await sarsaJS(alpha,gamma,eps,episodes); trainingResults['SARSA']=res; datasets['SARSA']=res.stepsPerEpisode; }
+            if (document.getElementById('algoS').checked){
+                setControlsDisabledExcept(['stopBtn']);
+                resetEnv(); await sleep(50);
+                const res = await sarsaJS(alpha,gamma,eps,episodes);
+                trainingResults['SARSA']=res; datasets['SARSA']=res.stepsPerEpisode;
+                setAllControlsEnabled();
+            }
             if (trainingAbort) return;
-            if (document.getElementById('algoM').checked){ resetEnv(); await sleep(50); const res = await monteCarloJS(null,gamma,eps,episodes); trainingResults['Monte Carlo']=res; datasets['Monte']=res.stepsPerEpisode; }
+            if (document.getElementById('algoM').checked){
+                setControlsDisabledExcept(['stopBtn']);
+                resetEnv(); await sleep(50);
+                const res = await monteCarloJS(null,gamma,eps,episodes);
+                trainingResults['Monte Carlo']=res; datasets['Monte']=res.stepsPerEpisode;
+                setAllControlsEnabled();
+            }
             drawChart(datasets);
             // update stats
             document.getElementById('lastSteps').textContent = Object.values(trainingResults).map(r=>r.stepsPerEpisode.slice(-1)[0]).join(' | ');
@@ -493,6 +538,7 @@
                     if (res.info && res.info.win) { win = true; }
                     done = res.done;
                     steps++;
+                    if (simAbort) break;
                 }
 
                 evalResults.push({ name, path, steps, win, caught, trainingWins: data.wins || 0 });
@@ -514,6 +560,9 @@
             // Animate best path with color by algorithm
             const colorMap = { 'Q-Learning':'#3b82f6', 'SARSA':'#10b981', 'Monte Carlo':'#f59e0b', 'Monte':'#f59e0b' };
             const color = colorMap[best.name] || '#60a5fa';
+            // disable all controls while simulating best policy
+            setControlsDisabledExcept([]);
+            simAbort = false;
             animatePath(best.path, color);
         }
 
@@ -522,14 +571,14 @@
             renderGrid();
             let i=0;
             const gridEl = document.getElementById('grid');
-            const clearStyles = [];
-            const id = setInterval(()=>{
-                if (i>=path.length){ clearInterval(id); return; }
+            if (simulationInterval) clearInterval(simulationInterval);
+            simulationInterval = setInterval(()=>{
+                if (simAbort){ clearInterval(simulationInterval); simulationInterval = null; setAllControlsEnabled(); renderGrid(); return; }
+                if (i>=path.length){ clearInterval(simulationInterval); simulationInterval = null; setAllControlsEnabled(); return; }
                 const p = path[i];
                 const idx = p[1]*cols + p[0];
                 const cell = gridEl.children[idx];
                 if (cell){
-                    // record original style so we can restore after full render
                     cell.style.background = color;
                     cell.style.color = 'white';
                 }
