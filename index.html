@@ -45,7 +45,7 @@
 <body>
     <div class="container">
         <h1>Guardian's Sanctum — RL Sandbox</h1>
-        <p style="text-align:center;color:#666;margin-top:6px;font-style:italic">Navigate the sanctum, pick up the key, open the door, avoid sentinels (noise attracts them).</p>
+        <p style="text-align:center;color:#666;margin-top:6px;font-style:italic">Navigate the sanctum, open doors (some lead to dead-ends), avoid sentinels (they can detect and chase you).</p>
 
         <div class="main">
             <div class="panel">
@@ -63,9 +63,8 @@
                     </div>
                     <div class="legend">
                         <div class="legend-item"><div class="legend-swatch" style="background:#27ae60"></div><div>Start</div></div>
-                        <div class="legend-item"><div class="legend-swatch" style="background:#9b59b6"></div><div>Key</div></div>
-                        <div class="legend-item"><div class="legend-swatch" style="background:#d35400"></div><div>Door</div></div>
-                        <div class="legend-item"><div class="legend-swatch" style="background:#f1c40f"></div><div>Treasure</div></div>
+                        <div class="legend-item"><div class="legend-swatch" style="background:#d35400"></div><div>Door (exit)</div></div>
+                        <div class="legend-item"><div class="legend-swatch" style="background:#b45309"></div><div>Dead-end Door</div></div>
                         <div class="legend-item"><div class="legend-swatch" style="background:#ef4444"></div><div>Sentinel</div></div>
                         <div class="legend-item"><div class="legend-swatch" style="background:#2c3e50"></div><div>Wall</div></div>
                     </div>
@@ -78,9 +77,7 @@
                         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
                             <label><input type="radio" name="editMode" value="wall" checked onchange="setEditMode('wall')"> Toggle Wall</label>
                             <label><input type="radio" name="editMode" value="start" onchange="setEditMode('start')"> Set Start</label>
-                            <label><input type="radio" name="editMode" value="key" onchange="setEditMode('key')"> Set Key</label>
-                            <label><input type="radio" name="editMode" value="door" onchange="setEditMode('door')"> Set Door</label>
-                            <label><input type="radio" name="editMode" value="treasure" onchange="setEditMode('treasure')"> Set Treasure</label>
+                            <label><input type="radio" name="editMode" value="door" onchange="setEditMode('door')"> Set Door / Toggle Dead-end</label>
                             <label><input type="radio" name="editMode" value="patrol" onchange="setEditMode('patrol')"> Add Patrol Point</label>
                         </div>
 
@@ -146,14 +143,17 @@
             3: [-1,0]  // left
         };
 
+        // Sentinel detection range (Manhattan distance)
+        const SENTINEL_DETECT_RANGE = 3;
+
         // Map definition (default 7x7) similar to guardian_env.py
         const default_map = [
             "#######",
-            "#S...K#",
+            "#S....#",
             "#.#.#.#",
             "#..D..#",
             "#.#.#.#",
-            "#...T.#",
+            "#.....#",
             "#######",
         ];
 
@@ -172,34 +172,33 @@
         function parseMap(map) {
             rows = map.length; cols = map[0].length;
             walls = new Set();
-            let start=null,key=null,door=null,treasure=null;
+            let start=null; const doors=[]; const deadends=[];
             for (let y=0;y<rows;y++){
                 for (let x=0;x<cols;x++){
                     const ch = map[y][x];
                     if (ch==='#') walls.add(`${x},${y}`);
                     if (ch==='S') start=[x,y];
-                    if (ch==='K') key=[x,y];
-                    if (ch==='D') door=[x,y];
-                    if (ch==='T') treasure=[x,y];
+                    if (ch==='D') doors.push([x,y]);
+                    if (ch==='d') deadends.push([x,y]);
                 }
             }
             // define patrol routes (hardcoded or derived)
             const patrols = [ [[1,4],[2,4],[3,4],[2,4]], [[5,2],[5,3],[5,4],[5,3]] ];
-            return {walls,start,key,door,treasure,patrols};
+            return {walls,start,doors,deadends,patrols};
         }
 
-        let walls, startPos, keyPos, doorPos, treasurePos, patrols;
+        let walls, startPos, doors, deadends, patrols;
+        let discoveredDeadends = new Set();
 
         function resetEnvInternal() {
-            ({ walls, start: startPos, key: keyPos, door: doorPos, treasure: treasurePos, patrols } = parseMap(raw_map));
+            ({ walls, start: startPos, doors, deadends, patrols } = parseMap(raw_map));
             agentPos = startPos ? startPos.slice() : [0,0];
-            keyPos = keyPos;
-            doorPos = doorPos;
-            treasurePos = treasurePos;
             hasKey = false;
             sentinelIdxs = (patrols || []).map(()=>0);
             sentinels = (patrols || []).map((r,i)=> r.length? r[0] : [-1,-1]);
             stepCount = 0;
+            // discovered dead-ends set
+            discoveredDeadends = new Set();
             renderGrid();
         }
 
@@ -219,16 +218,17 @@
             } else if (editMode==='key'){
                 for(let yy=0;yy<rows;yy++){ for(let xx=0;xx<cols;xx++){ if (raw_map[yy][xx]==='K') setTile(xx,yy,'.'); }} setTile(x,y,'K');
             } else if (editMode==='door'){
-                for(let yy=0;yy<rows;yy++){ for(let xx=0;xx<cols;xx++){ if (raw_map[yy][xx]==='D') setTile(xx,yy,'.'); }} setTile(x,y,'D');
+                // toggle between exit door 'D' and dead-end door 'd'
+                if (ch==='D') setTile(x,y,'d'); else if (ch==='d') setTile(x,y,'.'); else setTile(x,y,'D');
             } else if (editMode==='treasure'){
-                for(let yy=0;yy<rows;yy++){ for(let xx=0;xx<cols;xx++){ if (raw_map[yy][xx]==='T') setTile(xx,yy,'.'); }} setTile(x,y,'T');
+                // removed treasure support
             } else if (editMode==='patrol'){
                 if (selectedPatrol < 0){ addPatrol(); }
                 // append point
                 patrols[selectedPatrol].push([x,y]);
             }
             // re-parse and render (map parser returns keys: start, key, door, treasure)
-            ({ walls, start: startPos, key: keyPos, door: doorPos, treasure: treasurePos } = parseMap(raw_map));
+            ({ walls, start: startPos, doors, deadends } = parseMap(raw_map));
             // keep existing patrols if any (parseMap returns default routes)
             if (!patrols || patrols.length===0) patrols = parseMap(raw_map).patrols;
             sentinelIdxs = patrols.map(()=>0);
@@ -255,11 +255,26 @@
                     const ch = raw_map[y][x];
                     if (walls.has(key)) { cell.classList.add('wall'); }
                     if (startPos && startPos[0]===x && startPos[1]===y){ cell.classList.add('start'); cell.textContent='S' }
-                    if (keyPos && keyPos[0]===x && keyPos[1]===y && !hasKey){ cell.classList.add('key'); cell.textContent='K' }
-                    if (doorPos && doorPos[0]===x && doorPos[1]===y){ cell.classList.add('door'); cell.textContent='D' }
-                    if (treasurePos && treasurePos[0]===x && treasurePos[1]===y){ cell.classList.add('treasure'); cell.textContent='T' }
-                    for (let i=0;i<sentinels.length;i++){ const s = sentinels[i]; if (s[0]===x && s[1]===y){ cell.classList.add('sentinel'); cell.textContent='G' } }
-                    if (agentPos && agentPos[0]===x && agentPos[1]===y){ cell.classList.add('agent'); cell.textContent='A' }
+                    // doors: exit 'D', dead-end 'd'
+                    const mapCh = raw_map[y][x];
+                    if (mapCh === 'D') { cell.classList.add('door'); cell.textContent='D' }
+                    if (mapCh === 'd') { cell.classList.add('door'); cell.style.background = '#b45309'; cell.textContent = (discoveredDeadends.has(`${x},${y}`) ? 'X' : 'd'); }
+                    for (let i=0;i<sentinels.length;i++){ const s = sentinels[i]; if (s && s[0]===x && s[1]===y){ cell.classList.add('sentinel'); cell.textContent='G' } }
+                    // Show Start symbol even if the agent is standing on the start tile (keep 'S' visible)
+                    if (agentPos && agentPos[0]===x && agentPos[1]===y){
+                        const isStartHere = (startPos && startPos[0]===x && startPos[1]===y);
+                        if (!isStartHere){
+                            // place agent marker
+                            const mark = document.createElement('div');
+                            mark.style.position='absolute'; mark.style.width='10px'; mark.style.height='10px'; mark.style.borderRadius='50%'; mark.style.background='rgba(255,255,255,0.95)'; mark.style.bottom='6px'; mark.style.left='6px';
+                            cell.appendChild(mark);
+                        } else {
+                            // keep Start marker visible and add a small dot to indicate agent presence
+                            const dot = document.createElement('div');
+                            dot.style.position='absolute'; dot.style.width='8px'; dot.style.height='8px'; dot.style.borderRadius='50%'; dot.style.background='rgba(255,255,255,0.95)'; dot.style.bottom='6px'; dot.style.left='6px';
+                            cell.appendChild(dot);
+                        }
+                    }
                     // mark patrol points (small indicator)
                     if (patrols){
                         for (let pi=0; pi<patrols.length; pi++){
@@ -287,44 +302,61 @@
 
         // Utilities
         function inBounds(pos){ return pos[0]>=0 && pos[0]<cols && pos[1]>=0 && pos[1]<rows }
-        function isFree(pos){ const k=`${pos[0]},${pos[1]}`; if (walls.has(k)) return false; if (doorPos && pos[0]===doorPos[0] && pos[1]===doorPos[1] && !hasKey) return false; return true }
+        function isFree(pos){
+            const k = `${pos[0]},${pos[1]}`;
+            if (walls.has(k)) return false;
+            // prevent stepping into a cell currently occupied by a sentinel
+            for (const s of sentinels){ if (!s) continue; if (s[0]===pos[0] && s[1]===pos[1]) return false; }
+            return true;
+        }
 
-        function envReset(){ agentPos = startPos.slice(); hasKey=false; sentinelIdxs = patrols.map(()=>0); sentinels = patrols.map(r=>r[0]); stepCount=0; return getState(); }
+        function envReset(){ ({ walls, start: startPos, doors, deadends, patrols } = parseMap(raw_map)); agentPos = startPos.slice(); hasKey=false; sentinelIdxs = patrols.map(()=>0); sentinels = patrols.map(r=>r[0]); stepCount=0; discoveredDeadends = new Set(); return getState(); }
 
         function patrolCycle(){ let prod=1; for(const r of patrols) prod*=r.length; return prod }
 
-        function getState(){ return `${agentPos[0]},${agentPos[1]},${hasKey?1:0},${stepCount%patrolCycle()}` }
+        function getState(){ return `${agentPos[0]},${agentPos[1]},${stepCount%patrolCycle()}` }
 
         function stepEnv(action){
-            // single-step movement only (no fast actions / no noise)
+            // single-step movement only (no fast actions)
             const base = action % 4;
             let reward = -1.0; let done=false; let info={};
 
             let target = [ agentPos[0]+DIRS[base][0], agentPos[1]+DIRS[base][1] ];
             if (inBounds(target) && isFree(target)) agentPos = target;
 
-            // pick up key
-            if (keyPos && agentPos[0]===keyPos[0] && agentPos[1]===keyPos[1] && !hasKey){ hasKey=true; reward += 50 }
+            // check door interactions: 'D' = exit (win), 'd' = dead-end (discovered)
+            const hereCh = raw_map[agentPos[1]][agentPos[0]];
+            if (hereCh === 'D') { reward += 200; done = true; info.win = true; renderGrid(); return { state:getState(), reward, done, info }; }
+            if (hereCh === 'd') { discoveredDeadends.add(`${agentPos[0]},${agentPos[1]}`); reward -= 5 }
 
-            // move sentinels along their patrol routes (no noise attraction)
+            // move sentinels: patrol or chase if within detection range
             let newPos = [];
             for (let i=0;i<patrols.length;i++){
                 let route = patrols[i];
                 if (!route || route.length===0){ newPos.push([-1,-1]); sentinelIdxs[i]=0; continue; }
-                let curIdx = sentinelIdxs[i];
-                let nextIdx = (curIdx+1) % route.length;
-                newPos.push(route[nextIdx]);
-                sentinelIdxs[i] = nextIdx;
+                let cur = sentinels[i] || route[0];
+                let curIdx = sentinelIdxs[i] || 0;
+                const dist = Math.abs(agentPos[0]-cur[0]) + Math.abs(agentPos[1]-cur[1]);
+                if (dist <= SENTINEL_DETECT_RANGE){
+                    // chase: move one step towards agent (Manhattan greedy)
+                    const rx = agentPos[0] - cur[0]; const ry = agentPos[1] - cur[1];
+                    let nx = cur[0], ny = cur[1];
+                    if (Math.abs(rx) >= Math.abs(ry)) nx += Math.sign(rx); else ny += Math.sign(ry);
+                    if (inBounds([nx,ny]) && !walls.has(`${nx},${ny}`)) newPos.push([nx,ny]); else newPos.push(cur);
+                    // do not update patrol index while chasing
+                } else {
+                    // continue patrol
+                    let nextIdx = (curIdx+1) % route.length;
+                    newPos.push(route[nextIdx]);
+                    sentinelIdxs[i] = nextIdx;
+                }
             }
             sentinels = newPos;
 
-            // check caught
+            // check caught after sentinel move
             for (const s of sentinels){ if (s[0]===agentPos[0] && s[1]===agentPos[1]){ reward -=100; done=true; info.caught=true; renderGrid(); return {state:getState(), reward, done, info} } }
 
             stepCount += 1; if (stepCount>=maxSteps){ done=true; info.timeout=true }
-
-            // treasure
-            if (treasurePos && agentPos[0]===treasurePos[0] && agentPos[1]===treasurePos[1] && hasKey){ reward += 200; done=true; info.win=true }
 
             renderGrid(); return { state:getState(), reward, done, info };
         }
