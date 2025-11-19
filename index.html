@@ -70,7 +70,7 @@
                         <div class="legend-item"><div class="legend-swatch" style="background:#2c3e50"></div><div>Wall</div></div>
                     </div>
                     <div class="buttons">
-                        <button class="primary" onclick="resetEnv()">Reset Env</button>
+                        <button class="primary" id="resetBtn" onclick="resetToDefault()">Reset Env</button>
                         <button class="secondary" onclick="randomizeWalls()">Random Walls</button>
                     </div>
 
@@ -191,17 +191,14 @@
         let walls, startPos, keyPos, doorPos, treasurePos, patrols;
 
         function resetEnvInternal() {
-            ({walls,start:keyPos,door:doorPos,treasure:treasurePos,patrols} = (()=>{
-                const parsed = parseMap(raw_map);
-                return { walls: parsed.walls, start: parsed.start, key: parsed.key, door: parsed.door, treasure: parsed.treasure, patrols: parsed.patrols };
-            })());
-            agentPos = startPos = parseMap(raw_map).start;
-            keyPos = parseMap(raw_map).key;
-            doorPos = parseMap(raw_map).door;
-            treasurePos = parseMap(raw_map).treasure;
+            ({ walls, start: startPos, key: keyPos, door: doorPos, treasure: treasurePos, patrols } = parseMap(raw_map));
+            agentPos = startPos ? startPos.slice() : [0,0];
+            keyPos = keyPos;
+            doorPos = doorPos;
+            treasurePos = treasurePos;
             hasKey = false;
-            sentinelIdxs = patrols.map(()=>0);
-            sentinels = patrols.map((r,i)=> r[0]);
+            sentinelIdxs = (patrols || []).map(()=>0);
+            sentinels = (patrols || []).map((r,i)=> r.length? r[0] : [-1,-1]);
             stepCount = 0;
             renderGrid();
         }
@@ -347,15 +344,16 @@
         // JS Agents (tabular) — simplified versions
         function initQ(){ const Q={}; for(let y=0;y<rows;y++){ for(let x=0;x<cols;x++){ const k=`${x},${y},0,0`; /* we'll use getState dynamic keys, but for simplicity we'll lazily init */ } } return Q }
 
-        function qLearningJS(alpha,gamma,eps,episodes){
+        async function qLearningJS(alpha,gamma,eps,episodes){
             const Q = {}; const stepsPerEpisode=[]; let wins=0,caught=0;
             for(let ep=0; ep<episodes; ep++){
                 let state = envReset(); // resetEnv
-                state = getState(); let done=false; let steps=0; while(!done && steps<200){
+                state = getState(); let done=false; let steps=0;
+                while(!done && steps<200){
+                    if (trainingAbort) break;
                     // choose action
-                    if (!(state in Q)){ Q[state] = new Array(8).fill(0) }
-                    let a;
-                    if (Math.random()<eps) a = Math.floor(Math.random()*8); else a = argMax(Q[state]);
+                    if (!(state in Q)){ Q[state] = new Array(8).fill(0); }
+                    let a = (Math.random()<eps) ? Math.floor(Math.random()*8) : argMax(Q[state]);
                     const res = stepEnv(a);
                     const nextState = res.state; const r = res.reward; done = res.done;
                     if (!(nextState in Q)) Q[nextState]=new Array(8).fill(0);
@@ -365,14 +363,17 @@
                     if (res.info && res.info.win) wins++; if (res.info && res.info.caught) caught++;
                 }
                 stepsPerEpisode.push(steps);
+                // yield to UI every 10 episodes
+                if (ep % 10 === 0) await sleep(0);
                 if (trainingAbort) break;
             }
             return {Q, stepsPerEpisode, wins, caught};
         }
 
-        function sarsaJS(alpha,gamma,eps,episodes){
+        async function sarsaJS(alpha,gamma,eps,episodes){
             const Q = {}; const stepsPerEpisode=[]; let wins=0,caught=0;
             for(let ep=0; ep<episodes; ep++){
+                if (trainingAbort) break;
                 let state = envReset(); state = getState(); if (!(state in Q)) Q[state]=new Array(8).fill(0);
                 let a = (Math.random()<eps) ? Math.floor(Math.random()*8) : argMax(Q[state]);
                 let done=false; let steps=0;
@@ -386,14 +387,16 @@
                     if (trainingAbort) break;
                 }
                 stepsPerEpisode.push(steps);
+                if (ep % 10 === 0) await sleep(0);
                 if (trainingAbort) break;
             }
             return {Q, stepsPerEpisode, wins, caught};
         }
 
-        function monteCarloJS(alpha,gamma,eps,episodes){
+        async function monteCarloJS(alpha,gamma,eps,episodes){
             const Q = {}; const returnsSum = {}; const returnsCount = {}; const stepsPerEpisode=[]; let wins=0,caught=0;
             for(let ep=0; ep<episodes; ep++){
+                if (trainingAbort) break;
                 // generate episode
                 envReset(); let done=false; let steps=0; const episode=[];
                 while(!done && steps<200){ const state=getState(); if (!(state in Q)) Q[state]=new Array(8).fill(0);
@@ -402,7 +405,8 @@
                 stepsPerEpisode.push(steps);
                 // compute returns first-visit
                 let G=0; const visited=new Set();
-                for(let t=episode.length-1;t>=0;t--){ const s=episode[t].state; const a=episode[t].action; const r=episode[t].reward; G = gamma*G + r; const saKey = `${s}|${a}`; if (!visited.has(saKey)){ visited.add(saKey); if (alpha===null){ returnsSum[saKey] = (returnsSum[saKey]||0) + G; returnsCount[saKey] = (returnsCount[saKey]||0) + 1; const sBase = s; Q[sBase][a] = returnsSum[saKey]/returnsCount[saKey]; } else { Q[s][a] += alpha*(G - Q[s][a]); } } }
+                for(let t=episode.length-1;t>=0;t--){ const s=episode[t].state; const a=episode[t].action; const r=episode[t].reward; G = gamma*G + r; const saKey = s + '|' + a; if (!visited.has(saKey)){ visited.add(saKey); if (alpha===null){ returnsSum[saKey] = (returnsSum[saKey]||0) + G; returnsCount[saKey] = (returnsCount[saKey]||0) + 1; const sBase = s; if (!(sBase in Q)) Q[sBase]=new Array(8).fill(0); Q[sBase][a] = returnsSum[saKey]/returnsCount[saKey]; } else { if (!(s in Q)) Q[s]=new Array(8).fill(0); Q[s][a] += alpha*(G - Q[s][a]); } } }
+                if (ep % 10 === 0) await sleep(0);
                 if (trainingAbort) break;
             }
             return {Q, stepsPerEpisode, wins, caught};
@@ -413,12 +417,19 @@
         // Controls and hooking
         function resetEnv(){
             // Initialize environment from the current raw_map (do NOT overwrite raw_map)
-            ({walls,startPos,keyPos,doorPos,treasurePos} = parseMap(raw_map));
+            ({ walls, start: startPos, key: keyPos, door: doorPos, treasure: treasurePos } = parseMap(raw_map));
             if (!patrols || patrols.length===0) patrols = parseMap(raw_map).patrols;
             agentPos = startPos ? startPos.slice() : [0,0];
-            sentinelIdxs = patrols.map(()=>0);
-            sentinels = patrols.map(r=> r.length? r[0] : [-1,-1]);
+            sentinelIdxs = (patrols || []).map(()=>0);
+            sentinels = (patrols || []).map(r=> r.length? r[0] : [-1,-1]);
             hasKey=false; stepCount=0; updatePatrolSelect(); renderGrid();
+        }
+
+        function resetToDefault(){
+            raw_map = default_map.slice();
+            // reset patrols to default as well
+            patrols = parseMap(raw_map).patrols;
+            resetEnv();
         }
         function randomizeWalls(){ // simple randomization while keeping S,K,D,T and border walls
             const size = parseInt(document.getElementById('mapSize').value)||7; // for now keep default_map
@@ -442,11 +453,11 @@
             trainingAbort=false; const alpha=parseFloat(document.getElementById('alpha').value); const gamma=parseFloat(document.getElementById('gamma').value); const eps=parseFloat(document.getElementById('eps').value); const episodes=parseInt(document.getElementById('episodes').value)||200;
             trainingResults={};
             const datasets = {};
-            if (document.getElementById('algoQ').checked){ resetEnv(); await sleep(50); const res = qLearningJS(alpha,gamma,eps,episodes); trainingResults['Q-Learning']=res; datasets['Q-Learning']=res.stepsPerEpisode; }
+            if (document.getElementById('algoQ').checked){ resetEnv(); await sleep(50); const res = await qLearningJS(alpha,gamma,eps,episodes); trainingResults['Q-Learning']=res; datasets['Q-Learning']=res.stepsPerEpisode; }
             if (trainingAbort) return;
-            if (document.getElementById('algoS').checked){ resetEnv(); await sleep(50); const res = sarsaJS(alpha,gamma,eps,episodes); trainingResults['SARSA']=res; datasets['SARSA']=res.stepsPerEpisode; }
+            if (document.getElementById('algoS').checked){ resetEnv(); await sleep(50); const res = await sarsaJS(alpha,gamma,eps,episodes); trainingResults['SARSA']=res; datasets['SARSA']=res.stepsPerEpisode; }
             if (trainingAbort) return;
-            if (document.getElementById('algoM').checked){ resetEnv(); await sleep(50); const res = monteCarloJS(null,gamma,eps,episodes); trainingResults['Monte Carlo']=res; datasets['Monte']=res.stepsPerEpisode; }
+            if (document.getElementById('algoM').checked){ resetEnv(); await sleep(50); const res = await monteCarloJS(null,gamma,eps,episodes); trainingResults['Monte Carlo']=res; datasets['Monte']=res.stepsPerEpisode; }
             drawChart(datasets);
             // update stats
             document.getElementById('lastSteps').textContent = Object.values(trainingResults).map(r=>r.stepsPerEpisode.slice(-1)[0]).join(' | ');
